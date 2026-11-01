@@ -16,7 +16,7 @@ st.write(
 )
 
 # Model paths
-MODEL_DIR = Path("models")
+MODEL_DIR = Path("model")
 
 MODEL_PATHS = {
     "Logistic Regression": MODEL_DIR / "logistic_regression.joblib",
