@@ -1,747 +1,763 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import joblib
 import os
+
+import joblib
+import numpy as np
+import pandas as pd
+import streamlit as st
 
 from sklearn.metrics import (
     accuracy_score,
+    classification_report,
+    confusion_matrix,
     precision_score,
     recall_score,
     f1_score,
-    confusion_matrix,
-    classification_report,
     matthews_corrcoef,
-    roc_auc_score
 )
 
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-
-# ============================================================
-# PAGE CONFIGURATION
-# ============================================================
+# =========================================================
+# 1. PAGE CONFIGURATION
+# =========================================================
 
 st.set_page_config(
-    page_title="Credit Card Default Prediction",
-    page_icon="💳",
-    layout="wide"
+    page_title="Online Shoppers Purchase Prediction",
+    page_icon="🛍️",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-
-# ============================================================
-# CONSTANTS
-# ============================================================
-
-MODEL_DIR = "model"
+FEATURES = [f"X{i}" for i in range(1, 24)]
 
 MODEL_FILES = {
     "Logistic Regression": "logistic_regression.joblib",
     "Decision Tree": "decision_tree.joblib",
     "KNN": "knn.joblib",
     "Naive Bayes": "naive_bayes.joblib",
-    "Support Vector Machine": "support_vector_machine.joblib"
+    "Support Vector Machine": "support_vector_machine.joblib",
 }
 
-EXPECTED_FEATURES = [f"X{i}" for i in range(1, 24)]
+# =========================================================
+# 2. CUSTOM STYLING
+# =========================================================
 
-TARGET_COLUMN = "Y"
+st.markdown(
+    """
+    <style>
+        .block-container {
+            padding-top: 2rem;
+            padding-bottom: 3rem;
+            max-width: 1500px;
+        }
 
+        div[data-testid="stMetric"] {
+            background-color: #1e293b;
+            border: 1px solid #334155;
+            padding: 18px;
+            border-radius: 12px;
+        }
 
-# ============================================================
-# HELPER FUNCTIONS
-# ============================================================
+        h1, h2, h3 {
+            font-weight: 700;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# =========================================================
+# 3. LOAD TRAINED MODEL
+# =========================================================
 
 @st.cache_resource
-def load_model(model_path):
-    """
-    Load a trained machine learning model from a joblib file.
-    """
+def load_model(model_path, modified_time):
     return joblib.load(model_path)
 
 
-def validate_features(df):
+def find_model_file(filename):
     """
-    Validate that the uploaded dataset contains X1 through X23.
+    Support both 'model' and 'models' directories.
     """
 
-    missing_columns = [
-        col for col in EXPECTED_FEATURES
-        if col not in df.columns
+    possible_paths = [
+        os.path.join("model", filename),
+        os.path.join("models", filename),
     ]
 
-    if missing_columns:
-        return False, missing_columns
-
-    return True, []
-
-
-def prepare_features(df):
-    """
-    Select the 23 required features in the exact order expected
-    by the trained models.
-
-    If the target column Y exists, preserve it separately.
-    """
-
-    X = df[EXPECTED_FEATURES].copy()
-
-    for column in EXPECTED_FEATURES:
-        X[column] = pd.to_numeric(
-            X[column],
-            errors="coerce"
-        )
-
-    if X.isnull().any().any():
-        invalid_columns = X.columns[
-            X.isnull().any()
-        ].tolist()
-
-        raise ValueError(
-            "Missing or non-numeric values were found in "
-            f"these feature columns: {invalid_columns}"
-        )
-
-    if not np.isfinite(X.to_numpy(dtype=float)).all():
-        raise ValueError(
-            "The dataset contains infinite or invalid numeric values."
-        )
-
-    return X
-
-
-def calculate_metrics(y_true, y_pred, y_score=None):
-    """
-    Calculate classification metrics.
-    """
-
-    metrics = {
-        "Accuracy": accuracy_score(y_true, y_pred),
-        "Precision": precision_score(
-            y_true, y_pred, zero_division=0
-        ),
-        "Recall": recall_score(
-            y_true, y_pred, zero_division=0
-        ),
-        "F1 Score": f1_score(
-            y_true, y_pred, zero_division=0
-        ),
-        "MCC": matthews_corrcoef(y_true, y_pred)
-    }
-
-    if y_score is not None:
-        try:
-            metrics["AUC"] = roc_auc_score(
-                y_true, y_score
-            )
-        except (ValueError, TypeError):
-            metrics["AUC"] = np.nan
-    else:
-        metrics["AUC"] = np.nan
-
-    return metrics
-
-
-def get_model_score(model, X):
-    """
-    Return prediction scores for ROC-AUC when supported.
-
-    Uses positive-class probabilities when available.
-    Otherwise, uses the decision function when available.
-    """
-
-    if hasattr(model, "predict_proba"):
-        probabilities = model.predict_proba(X)
-
-        if probabilities.shape[1] >= 2:
-            return probabilities[:, 1]
-
-    if hasattr(model, "decision_function"):
-        return model.decision_function(X)
+    for path in possible_paths:
+        if os.path.isfile(path):
+            return path
 
     return None
 
 
-def display_confusion_matrix(y_true, y_pred, model_name):
+def get_selected_model(model_name):
+    filename = MODEL_FILES[model_name]
+    model_path = find_model_file(filename)
+
+    if model_path is None:
+        st.error(
+            f"Model file not found: {filename}. "
+            "Check whether the file exists in the model/ "
+            "or models/ directory."
+        )
+        return None
+
+    try:
+        modified_time = os.path.getmtime(model_path)
+
+        model = load_model(
+            model_path,
+            modified_time,
+        )
+
+        return model
+
+    except Exception as exc:
+        st.error(f"Error loading model: {exc}")
+        return None
+
+
+# =========================================================
+# 4. DATASET VALIDATION
+# =========================================================
+
+def validate_dataset(df):
+
+    if df.empty:
+        return False, "The uploaded CSV is empty."
+
+    # Clean column names.
+    df.columns = df.columns.astype(str).str.strip()
+
+    # Check for X1-X23.
+    missing_columns = [
+        col for col in FEATURES
+        if col not in df.columns
+    ]
+
+    if missing_columns:
+        return (
+            False,
+            f"Missing required feature columns: {missing_columns}",
+        )
+
+    # Convert feature values to numeric.
+    for col in FEATURES:
+        df[col] = pd.to_numeric(
+            df[col],
+            errors="coerce",
+        )
+
+    # Reject missing or non-numeric values.
+    if df[FEATURES].isna().any().any():
+
+        invalid_columns = (
+            df[FEATURES]
+            .columns[df[FEATURES].isna().any()]
+            .tolist()
+        )
+
+        return (
+            False,
+            f"Missing or non-numeric values in: {invalid_columns}",
+        )
+
+    # Reject infinite values.
+    if not np.isfinite(
+        df[FEATURES].to_numpy(dtype=float)
+    ).all():
+
+        return (
+            False,
+            "Feature columns contain infinite values.",
+        )
+
+    # Validate optional target column.
+    if "Y" in df.columns:
+
+        if df["Y"].isna().any():
+            return False, "The Y column contains missing values."
+
+        normalized_y = df["Y"].astype(str).str.strip().str.lower()
+
+        valid_labels = {
+            "0", "1",
+            "0.0", "1.0",
+            "true", "false",
+            "yes", "no",
+            "purchase", "no purchase",
+        }
+
+        if not normalized_y.isin(valid_labels).all():
+            return (
+                False,
+                "The Y column must contain binary labels such as "
+                "0/1, True/False, or Purchase/No Purchase.",
+            )
+
+    return True, "Dataset validation successful."
+
+
+def normalize_target(series):
     """
-    Display a confusion matrix.
+    Convert common binary target formats to 0 and 1.
+
+    0 = No Purchase
+    1 = Purchase
     """
 
-    cm = confusion_matrix(
-        y_true,
-        y_pred,
-        labels=[0, 1]
+    mapping = {
+        "0": 0,
+        "0.0": 0,
+        "false": 0,
+        "no": 0,
+        "no purchase": 0,
+        "1": 1,
+        "1.0": 1,
+        "true": 1,
+        "yes": 1,
+        "purchase": 1,
+    }
+
+    normalized = series.astype(str).str.strip().str.lower()
+
+    return normalized.map(mapping).astype(int)
+
+
+# =========================================================
+# 5. SIDEBAR
+# =========================================================
+
+with st.sidebar:
+
+    st.title("⚙️ Configuration")
+
+    selected_model_name = st.selectbox(
+        "Select a Machine Learning Model",
+        options=list(MODEL_FILES.keys()),
+        index=1,
     )
 
-    fig, ax = plt.subplots(figsize=(6, 4))
+    st.divider()
 
-    sns.heatmap(
-        cm,
-        annot=True,
-        fmt="d",
-        cmap="viridis",
-        xticklabels=["No Default (0)", "Default (1)"],
-        yticklabels=["No Default (0)", "Default (1)"],
-        ax=ax
+    st.markdown(
+        """
+        ### 📋 Input Requirements
+
+        - CSV format
+        - 23 feature columns: X1-X23
+        - Optional target column: Y
+        - Numeric feature values
+        - Target labels: 0/1 or equivalent binary labels
+
+        ### 🤖 Available Models
+
+        - Logistic Regression
+        - Decision Tree
+        - KNN
+        - Naive Bayes
+        - Support Vector Machine
+        """
     )
 
-    ax.set_title(
-        f"{model_name} — Confusion Matrix"
-    )
-    ax.set_xlabel("Predicted Label")
-    ax.set_ylabel("True Label")
+# =========================================================
+# 6. MAIN APPLICATION
+# =========================================================
 
-    st.pyplot(fig)
-    plt.close(fig)
+st.title("🛍️ Online Shoppers Purchase Prediction")
 
-
-# ============================================================
-# APPLICATION HEADER
-# ============================================================
-
-st.title("💳 Credit Card Default Prediction")
+st.write(
+    "Upload a test dataset, select a machine learning model, "
+    "generate customer-level predictions, and evaluate model "
+    "performance when actual target labels are available."
+)
 
 st.markdown(
-    """
-    This application predicts whether a credit card customer
-    is likely to default on their payment using trained
-    machine learning classification models.
-
-    **Available models:** Logistic Regression, Decision Tree,
-    KNN, Naive Bayes, and Support Vector Machine.
-    """
+    f"**Selected Model:** {selected_model_name}"
 )
 
-st.divider()
-
-
-# ============================================================
-# SIDEBAR
-# ============================================================
-
-st.sidebar.header("⚙️ Configuration")
-
-selected_model_name = st.sidebar.selectbox(
-    "Select a Machine Learning Model",
-    list(MODEL_FILES.keys())
-)
-
-st.sidebar.markdown("---")
-
-st.sidebar.info(
-    """
-    **Input requirements**
-
-    - CSV format
-    - 23 required feature columns: X1–X23
-    - Optional target column: Y
-    - Numeric feature values
-    """
-)
-
-
-# ============================================================
-# LOAD SELECTED MODEL
-# ============================================================
-
-model_filename = MODEL_FILES[selected_model_name]
-
-model_path = os.path.join(
-    MODEL_DIR,
-    model_filename
-)
-
-st.subheader("Selected Model")
-
-st.write(f"**Model:** {selected_model_name}")
-
-if not os.path.isfile(model_path):
-    st.error(
-        f"Model file not found: `{model_path}`. "
-        "Ensure that the model directory and saved model "
-        "files are included in the project."
-    )
-    st.stop()
-
-try:
-    model = load_model(model_path)
-
-except Exception as e:
-    st.error(
-        f"Unable to load the selected model: {e}"
-    )
-    st.stop()
-
-
-# ============================================================
-# CSV UPLOAD
-# ============================================================
+# ---------------------------------------------------------
+# Upload CSV
+# ---------------------------------------------------------
 
 st.subheader("📂 Upload Test Dataset")
 
 uploaded_file = st.file_uploader(
     "Upload a CSV containing X1 through X23",
     type=["csv"],
-    help=(
-        "The CSV must contain all 23 features used during "
-        "model training. The target column Y is optional."
-    )
 )
 
 if uploaded_file is None:
+
     st.info(
-        "Upload a test CSV to generate customer default predictions."
+        "Upload your test CSV to begin prediction and evaluation."
     )
+
     st.stop()
 
-
-# ============================================================
-# READ CSV
-# ============================================================
+# ---------------------------------------------------------
+# Read CSV
+# ---------------------------------------------------------
 
 try:
+
     df = pd.read_csv(uploaded_file)
 
-    # Remove accidental spaces from column names.
-    df.columns = df.columns.astype(str).str.strip()
+except Exception as exc:
 
-except Exception as e:
-    st.error(f"Unable to read the uploaded CSV: {e}")
+    st.error(f"Unable to read the uploaded CSV: {exc}")
     st.stop()
 
-
-if df.empty:
-    st.error("The uploaded CSV contains no rows.")
-    st.stop()
-
-
-# ============================================================
-# VALIDATE DATASET
-# ============================================================
+# ---------------------------------------------------------
+# Validate Dataset
+# ---------------------------------------------------------
 
 st.subheader("🔎 Dataset Validation")
 
-st.write("Uploaded dataset dimensions:", df.shape)
+st.write(
+    f"**Uploaded dataset dimensions:** "
+    f"`{df.shape}`"
+)
 
-is_valid, missing_columns = validate_features(df)
+valid, validation_message = validate_dataset(df)
 
-if not is_valid:
-    st.error(
-        "The uploaded CSV is missing required feature columns: "
-        f"{missing_columns}"
-    )
+if not valid:
 
-    st.warning(
-        "Your CSV must contain every feature from X1 to X23. "
-        "A Revenue column is not required."
-    )
-
+    st.error(validation_message)
     st.stop()
-
 
 st.success(
-    "All 23 required feature columns (X1–X23) are present."
+    "All 23 required feature columns (X1-X23) are present "
+    "and valid."
 )
 
+if "Y" in df.columns:
 
-# ============================================================
-# PREVIEW DATA
-# ============================================================
-
-with st.expander("Preview Uploaded Dataset", expanded=True):
-
-    st.dataframe(
-        df.head(10),
-        use_container_width=True
+    st.success(
+        "Target column Y detected. Model evaluation is available."
     )
 
-    st.write(
-        f"**Rows:** {df.shape[0]} | "
-        f"**Columns:** {df.shape[1]}"
+else:
+
+    st.info(
+        "No Y column detected. The app will generate predictions, "
+        "but evaluation metrics cannot be calculated without "
+        "actual labels."
     )
 
+# ---------------------------------------------------------
+# Preview Data
+# ---------------------------------------------------------
 
-# ============================================================
-# PREPARE MODEL INPUT
-# ============================================================
+st.subheader("📊 Dataset Preview")
 
-try:
-    X = prepare_features(df)
-
-except ValueError as e:
-    st.error(str(e))
-    st.stop()
-
-
-# Check expected model input dimensions when available.
-expected_n_features = getattr(
-    model,
-    "n_features_in_",
-    None
+st.dataframe(
+    df.head(10),
+    use_container_width=True,
 )
 
-if expected_n_features is None and hasattr(model, "steps"):
-    final_estimator = model.steps[-1][1]
+with st.expander("View dataset statistics"):
 
-    expected_n_features = getattr(
-        final_estimator,
-        "n_features_in_",
-        None
-    )
+    st.write(df[FEATURES].describe().T)
 
-if (
-    expected_n_features is not None
-    and expected_n_features != X.shape[1]
-):
-    st.error(
-        f"The selected model expects {expected_n_features} "
-        f"features, but the application supplied {X.shape[1]}."
-    )
-    st.stop()
+# =========================================================
+# 7. LOAD MODEL AND GENERATE PREDICTIONS
+# =========================================================
 
-
-# ============================================================
-# PREDICTION
-# ============================================================
-
-st.subheader("🎯 Generate Predictions")
-
-st.write(
-    f"Ready to predict defaults for **{len(X)} customers** "
-    f"using **{selected_model_name}**."
-)
+st.subheader("🤖 Customer-Level Predictions")
 
 if st.button(
-    "Predict Defaults",
+    "Predict Purchases",
     type="primary",
-    use_container_width=True
+    use_container_width=False,
 ):
 
+    model = get_selected_model(selected_model_name)
+
+    if model is None:
+        st.stop()
+
+    X = df[FEATURES].copy()
+
     try:
-        with st.spinner("Generating predictions..."):
 
-            predictions = model.predict(X)
+        # Generate predictions.
+        predictions = np.asarray(
+            model.predict(X)
+        ).reshape(-1)
 
-            prediction_results = df.copy()
-
-            prediction_results["Predicted_Default"] = (
-                predictions.astype(int)
+        if len(predictions) != len(df):
+            st.error(
+                "The model returned a different number of "
+                "predictions than the number of uploaded rows."
             )
+            st.stop()
 
-            prediction_results["Prediction_Label"] = (
-                prediction_results["Predicted_Default"]
-                .map({
-                    0: "No Default",
-                    1: "Default"
-                })
-                .fillna("Unknown")
-            )
+        # Convert predicted labels to 0 and 1.
+        predicted_labels = normalize_target(
+            pd.Series(predictions)
+        ).to_numpy()
 
-            scores = get_model_score(model, X)
+        # Get prediction probabilities when supported.
+        probabilities = None
 
-            if scores is not None:
-                prediction_results[
-                    "Default_Score"
-                ] = scores
+        if hasattr(model, "predict_proba"):
 
-        st.session_state["prediction_results"] = (
-            prediction_results
+            try:
+
+                probabilities = model.predict_proba(X)
+
+                # Locate the class corresponding to label 1.
+                if hasattr(model, "classes_"):
+
+                    classes = list(model.classes_)
+
+                    positive_class_index = None
+
+                    for index, label in enumerate(classes):
+
+                        normalized_label = str(label).strip().lower()
+
+                        if normalized_label in {
+                            "1", "1.0", "true", "yes", "purchase"
+                        }:
+                            positive_class_index = index
+                            break
+
+                    if positive_class_index is not None:
+
+                        probabilities = probabilities[
+                            :, positive_class_index
+                        ]
+
+                    else:
+                        probabilities = None
+
+                else:
+                    probabilities = None
+
+            except Exception:
+                probabilities = None
+
+        # Save predictions.
+        results = df.copy()
+
+        results["Predicted_Y"] = predicted_labels
+
+        results["Predicted_Purchase"] = (
+            results["Predicted_Y"]
+            .map({
+                0: "No Purchase",
+                1: "Purchase",
+            })
         )
 
-        st.session_state["predictions"] = predictions
+        if probabilities is not None:
 
-        st.session_state["selected_model_name"] = (
-            selected_model_name
+            results["Purchase_Probability"] = probabilities
+
+        st.session_state["prediction_results"] = results
+        st.session_state["predicted_labels"] = predicted_labels
+        st.session_state["selected_model_name"] = selected_model_name
+
+        # -------------------------------------------------
+        # SUMMARY METRICS
+        # -------------------------------------------------
+
+        total_customers = len(results)
+
+        purchase_count = int(
+            (predicted_labels == 1).sum()
         )
 
-        st.session_state["prediction_scores"] = scores
-
-        st.success("Predictions generated successfully!")
-
-    except Exception as e:
-        st.error(
-            f"Prediction failed. Please verify that the uploaded "
-            f"features use the same format and encoding as the "
-            f"training data. Details: {e}"
+        no_purchase_count = int(
+            (predicted_labels == 0).sum()
         )
 
-
-# ============================================================
-# DISPLAY PREDICTION RESULTS
-# ============================================================
-
-if "prediction_results" in st.session_state:
-
-    if (
-        st.session_state["selected_model_name"]
-        == selected_model_name
-    ):
-
-        results = st.session_state["prediction_results"]
-
-        predictions = st.session_state["predictions"]
-
-        scores = st.session_state.get(
-            "prediction_scores"
+        purchase_percentage = (
+            purchase_count / total_customers * 100
+            if total_customers else 0
         )
 
-        st.divider()
-
-        st.subheader("📊 Prediction Summary")
-
-        total_customers = len(predictions)
-
-        default_count = int(
-            np.sum(predictions == 1)
-        )
-
-        non_default_count = int(
-            np.sum(predictions == 0)
-        )
-
-        default_percentage = (
-            default_count / total_customers * 100
-        )
+        st.success("Predictions generated successfully.")
 
         col1, col2, col3, col4 = st.columns(4)
 
         col1.metric(
             "Total Customers",
-            f"{total_customers:,}"
+            f"{total_customers:,}",
         )
 
         col2.metric(
-            "Predicted Defaults",
-            f"{default_count:,}"
+            "Predicted Purchases",
+            f"{purchase_count:,}",
         )
 
         col3.metric(
-            "Predicted Non-Defaults",
-            f"{non_default_count:,}"
+            "Predicted No Purchases",
+            f"{no_purchase_count:,}",
         )
 
         col4.metric(
-            "Default Rate",
-            f"{default_percentage:.2f}%"
+            "Purchase Rate",
+            f"{purchase_percentage:.2f}%",
         )
 
-
-        # ----------------------------------------------------
-        # RESULTS TABLE
-        # ----------------------------------------------------
+        # -------------------------------------------------
+        # CUSTOMER-LEVEL PREDICTIONS TABLE
+        # -------------------------------------------------
 
         st.subheader("Customer-Level Predictions")
 
         st.dataframe(
             results,
             use_container_width=True,
-            height=400
+            height=450,
         )
 
+        # -------------------------------------------------
+        # DOWNLOAD PREDICTIONS
+        # -------------------------------------------------
 
-        # ----------------------------------------------------
-        # DOWNLOAD RESULTS
-        # ----------------------------------------------------
-
-        csv_data = results.to_csv(
-            index=False
-        ).encode("utf-8")
+        csv_data = results.to_csv(index=False).encode("utf-8")
 
         st.download_button(
-            label="📥 Download Predictions as CSV",
+            label="Download Predictions CSV",
             data=csv_data,
-            file_name="credit_card_default_predictions.csv",
+            file_name="purchase_predictions.csv",
             mime="text/csv",
-            use_container_width=True
         )
 
-
-        # ----------------------------------------------------
-        # PREDICTION DISTRIBUTION
-        # ----------------------------------------------------
-
-        st.subheader("Prediction Distribution")
-
-        distribution = pd.Series(
-            predictions
-        ).value_counts().reindex(
-            [0, 1],
-            fill_value=0
-        )
-
-        fig, ax = plt.subplots(figsize=(7, 4))
-
-        ax.bar(
-            ["No Default", "Default"],
-            [
-                distribution.loc[0],
-                distribution.loc[1]
-            ]
-        )
-
-        ax.set_ylabel("Number of Customers")
-        ax.set_title("Predicted Customer Default Distribution")
-
-        st.pyplot(fig)
-        plt.close(fig)
-
-
-        # ----------------------------------------------------
-        # MODEL EVALUATION
-        # ----------------------------------------------------
+        # =================================================
+        # 8. MODEL EVALUATION
+        # =================================================
 
         st.divider()
 
-        st.subheader("📈 Model Evaluation")
+        st.header("📈 Model Evaluation")
 
-        if TARGET_COLUMN in df.columns:
+        if "Y" not in df.columns:
 
-            st.write(
-                "The uploaded dataset contains the actual target "
-                "column Y. Model evaluation metrics can therefore "
-                "be calculated."
+            st.warning(
+                "Evaluation metrics are unavailable because "
+                "the uploaded CSV does not contain the actual "
+                "target column Y. Upload a labeled test dataset "
+                "to view the confusion matrix and classification "
+                "report."
             )
-
-            try:
-                y_true = pd.to_numeric(
-                    df[TARGET_COLUMN],
-                    errors="raise"
-                ).to_numpy()
-
-                if pd.isna(y_true).any():
-                    raise ValueError(
-                        "The target column Y contains missing values."
-                    )
-
-                if not np.isin(y_true, [0, 1]).all():
-                    raise ValueError(
-                        "The target column Y must contain only 0 and 1."
-                    )
-
-                y_pred = predictions
-
-                metrics = calculate_metrics(
-                    y_true,
-                    y_pred,
-                    scores
-                )
-
-                m1, m2, m3 = st.columns(3)
-                m4, m5, m6 = st.columns(3)
-
-                m1.metric(
-                    "Accuracy",
-                    f"{metrics['Accuracy']:.4f}"
-                )
-
-                m2.metric(
-                    "Precision",
-                    f"{metrics['Precision']:.4f}"
-                )
-
-                m3.metric(
-                    "Recall",
-                    f"{metrics['Recall']:.4f}"
-                )
-
-                m4.metric(
-                    "F1 Score",
-                    f"{metrics['F1 Score']:.4f}"
-                )
-
-                m5.metric(
-                    "AUC",
-                    (
-                        f"{metrics['AUC']:.4f}"
-                        if not np.isnan(metrics["AUC"])
-                        else "N/A"
-                    )
-                )
-
-                m6.metric(
-                    "MCC",
-                    f"{metrics['MCC']:.4f}"
-                )
-
-
-                # Confusion matrix.
-                display_confusion_matrix(
-                    y_true,
-                    y_pred,
-                    selected_model_name
-                )
-
-
-                # Classification report.
-                st.subheader("Classification Report")
-
-                report = classification_report(
-                    y_true,
-                    y_pred,
-                    labels=[0, 1],
-                    target_names=[
-                        "No Default (0)",
-                        "Default (1)"
-                    ],
-                    output_dict=True,
-                    zero_division=0
-                )
-
-                report_df = pd.DataFrame(
-                    report
-                ).transpose()
-
-                st.dataframe(
-                    report_df.round(4),
-                    use_container_width=True
-                )
-
-
-                # Explain important metrics.
-                st.info(
-                    """
-                    **Metric interpretation**
-
-                    - **Accuracy:** Overall proportion of correct predictions.
-                    - **Precision:** Of customers predicted to default,
-                      the proportion who actually defaulted.
-                    - **Recall:** Of actual defaulters, the proportion
-                      correctly identified.
-                    - **F1 Score:** Harmonic mean of precision and recall.
-                    - **AUC:** Ability to rank positive cases above
-                      negative cases using prediction scores.
-                    - **MCC:** A balanced measure of binary
-                      classification performance.
-                    """
-                )
-
-            except (ValueError, TypeError) as e:
-                st.warning(
-                    f"Could not calculate evaluation metrics: {e}"
-                )
 
         else:
 
-            st.info(
-                """
-                The uploaded CSV does not contain the actual target
-                column Y.
+            y_true = normalize_target(df["Y"])
 
-                Predictions are available, but accuracy, precision,
-                recall, F1 score, AUC, MCC, and the confusion matrix
-                cannot be calculated without known actual labels.
+            y_pred = predicted_labels
+
+            # Ensure both actual classes are represented
+            # in the confusion matrix.
+            cm = confusion_matrix(
+                y_true,
+                y_pred,
+                labels=[0, 1],
+            )
+
+            accuracy = accuracy_score(
+                y_true,
+                y_pred,
+            )
+
+            precision = precision_score(
+                y_true,
+                y_pred,
+                zero_division=0,
+            )
+
+            recall = recall_score(
+                y_true,
+                y_pred,
+                zero_division=0,
+            )
+
+            f1 = f1_score(
+                y_true,
+                y_pred,
+                zero_division=0,
+            )
+
+            mcc = matthews_corrcoef(
+                y_true,
+                y_pred,
+            )
+
+            # ---------------------------------------------
+            # EVALUATION SUMMARY
+            # ---------------------------------------------
+
+            st.subheader("Evaluation Metrics")
+
+            col1, col2, col3 = st.columns(3)
+
+            col1.metric(
+                "Accuracy",
+                f"{accuracy:.4f}",
+            )
+
+            col2.metric(
+                "Precision",
+                f"{precision:.4f}",
+            )
+
+            col3.metric(
+                "Recall",
+                f"{recall:.4f}",
+            )
+
+            col1, col2, col3 = st.columns(3)
+
+            col1.metric(
+                "F1-Score",
+                f"{f1:.4f}",
+            )
+
+            col2.metric(
+                "Matthews Correlation Coefficient",
+                f"{mcc:.4f}",
+            )
+
+            col3.metric(
+                "Test Samples",
+                f"{len(y_true):,}",
+            )
+
+            # ---------------------------------------------
+            # CONFUSION MATRIX
+            # ---------------------------------------------
+
+            st.subheader("Confusion Matrix")
+
+            cm_df = pd.DataFrame(
+                cm,
+                index=[
+                    "Actual No Purchase",
+                    "Actual Purchase",
+                ],
+                columns=[
+                    "Predicted No Purchase",
+                    "Predicted Purchase",
+                ],
+            )
+
+            st.dataframe(
+                cm_df,
+                use_container_width=True,
+            )
+
+            # ---------------------------------------------
+            # CLASSIFICATION REPORT
+            # ---------------------------------------------
+
+            st.subheader("Classification Report")
+
+            report = classification_report(
+                y_true,
+                y_pred,
+                labels=[0, 1],
+                target_names=[
+                    "No Purchase",
+                    "Purchase",
+                ],
+                output_dict=True,
+                zero_division=0,
+            )
+
+            report_df = pd.DataFrame(report).T
+
+            st.dataframe(
+                report_df.style.format(
+                    {
+                        "precision": "{:.4f}",
+                        "recall": "{:.4f}",
+                        "f1-score": "{:.4f}",
+                        "support": "{:.0f}",
+                    },
+                    na_rep="-",
+                ),
+                use_container_width=True,
+            )
+
+            # ---------------------------------------------
+            # CONFUSION MATRIX VISUALIZATION
+            # ---------------------------------------------
+
+            st.subheader("Confusion Matrix Visualization")
+
+            import matplotlib.pyplot as plt
+            from sklearn.metrics import ConfusionMatrixDisplay
+
+            fig, ax = plt.subplots(figsize=(7, 5))
+
+            display = ConfusionMatrixDisplay(
+                confusion_matrix=cm,
+                display_labels=[
+                    "No Purchase",
+                    "Purchase",
+                ],
+            )
+
+            display.plot(
+                ax=ax,
+                cmap="Blues",
+                values_format="d",
+                colorbar=False,
+            )
+
+            ax.set_title(
+                f"Confusion Matrix - {selected_model_name}"
+            )
+
+            fig.tight_layout()
+
+            st.pyplot(fig)
+
+            plt.close(fig)
+
+            # ---------------------------------------------
+            # EVALUATION INTERPRETATION
+            # ---------------------------------------------
+
+            st.subheader("Evaluation Interpretation")
+
+            st.write(
+                f"""
+                - **Accuracy:** {accuracy:.2%} of all predictions
+                  were correct.
+                - **Precision:** {precision:.2%} of predicted
+                  purchases were actual purchases.
+                - **Recall:** {recall:.2%} of actual purchases
+                  were correctly identified.
+                - **F1-score:** {f1:.4f}, the harmonic mean
+                  of precision and recall.
+                - **MCC:** {mcc:.4f}, a measure of classification
+                  quality that considers all four confusion
+                  matrix outcomes. A value of +1 indicates
+                  perfect prediction, 0 indicates no better
+                  than chance in the correlation sense, and
+                  -1 indicates completely inverse prediction.
                 """
             )
 
+    except Exception as exc:
 
-# ============================================================
-# FOOTER
-# ============================================================
+        st.error(
+            f"Prediction or evaluation failed: {exc}"
+        )
+
+# =========================================================
+# 9. FOOTER
+# =========================================================
 
 st.divider()
 
 st.caption(
-    "Credit Card Default Prediction | "
-    "Machine Learning Classification Project"
+    "Online Shoppers Purchase Prediction | "
+    "Machine Learning Model Evaluation"
 )
