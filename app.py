@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -746,4 +745,3 @@ st.caption(
     "Credit Card Default Prediction | "
     "Machine Learning Classification Project"
 )
-```
