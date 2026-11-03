@@ -24,6 +24,40 @@ st.write(
     "to predict credit card defaults."
 )
 
+st.markdown(
+    """
+    <style>
+        .stApp {
+            background-color: #020b16;
+            color: #e6edf7;
+        }
+        .metric-card {
+            padding: 0.15rem 0;
+            margin-bottom: 0.5rem;
+        }
+        .metric-label {
+            font-size: 0.9rem;
+            color: #aab7c8;
+            margin-bottom: 0.2rem;
+            font-weight: 500;
+        }
+        .metric-value {
+            font-size: 1.85rem;
+            color: #f2f6fb;
+            font-weight: 500;
+            line-height: 1.2;
+        }
+        .section-title {
+            color: #f2f6fb;
+            margin-top: 1.5rem;
+            margin-bottom: 0.75rem;
+            font-weight: 700;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 def render_evaluation_metrics(metrics):
     metric_labels = [
@@ -41,14 +75,14 @@ def render_evaluation_metrics(metrics):
     for idx, (label, value) in enumerate(metric_labels[:3]):
         with first_row[idx]:
             st.markdown(
-                f"<div style='padding: 0.15rem 0;'><div style='font-size: 0.9rem; color: #6b7280; margin-bottom: 0.15rem;'>{label}</div><div style='font-size: 1.8rem; color: #0f172a; font-weight: 500;'>{value:.4f}</div></div>",
+                f"<div class='metric-card'><div class='metric-label'>{label}</div><div class='metric-value'>{value:.4f}</div></div>",
                 unsafe_allow_html=True,
             )
 
     for idx, (label, value) in enumerate(metric_labels[3:]):
         with second_row[idx]:
             st.markdown(
-                f"<div style='padding: 0.15rem 0;'><div style='font-size: 0.9rem; color: #6b7280; margin-bottom: 0.15rem;'>{label}</div><div style='font-size: 1.8rem; color: #0f172a; font-weight: 500;'>{value:.4f}</div></div>",
+                f"<div class='metric-card'><div class='metric-label'>{label}</div><div class='metric-value'>{value:.4f}</div></div>",
                 unsafe_allow_html=True,
             )
 
