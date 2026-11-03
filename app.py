@@ -2,6 +2,15 @@ import streamlit as st
 import pandas as pd
 import joblib
 from pathlib import Path
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    f1_score,
+    matthews_corrcoef,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 
 st.set_page_config(
     page_title="Credit Card Default Prediction",
@@ -15,8 +24,48 @@ st.write(
     "to predict credit card defaults."
 )
 
+
+def render_evaluation_metrics(metrics):
+    metric_labels = [
+        ("Accuracy", metrics["Accuracy"]),
+        ("AUC", metrics["AUC"]),
+        ("Precision", metrics["Precision"]),
+        ("Recall", metrics["Recall"]),
+        ("F1 Score", metrics["F1 Score"]),
+        ("MCC", metrics["MCC"]),
+    ]
+
+    first_row = st.columns(3)
+    second_row = st.columns(3)
+
+    for idx, (label, value) in enumerate(metric_labels[:3]):
+        with first_row[idx]:
+            st.markdown(
+                f"<div style='padding: 0.15rem 0;'><div style='font-size: 0.9rem; color: #6b7280; margin-bottom: 0.15rem;'>{label}</div><div style='font-size: 1.8rem; color: #0f172a; font-weight: 500;'>{value:.4f}</div></div>",
+                unsafe_allow_html=True,
+            )
+
+    for idx, (label, value) in enumerate(metric_labels[3:]):
+        with second_row[idx]:
+            st.markdown(
+                f"<div style='padding: 0.15rem 0;'><div style='font-size: 0.9rem; color: #6b7280; margin-bottom: 0.15rem;'>{label}</div><div style='font-size: 1.8rem; color: #0f172a; font-weight: 500;'>{value:.4f}</div></div>",
+                unsafe_allow_html=True,
+            )
+
+
+def compute_model_metrics(y_true, y_pred, y_score=None):
+    metrics = {
+        "Accuracy": accuracy_score(y_true, y_pred),
+        "AUC": roc_auc_score(y_true, y_score) if y_score is not None else 0.0,
+        "Precision": precision_score(y_true, y_pred, zero_division=0),
+        "Recall": recall_score(y_true, y_pred, zero_division=0),
+        "F1 Score": f1_score(y_true, y_pred, zero_division=0),
+        "MCC": matthews_corrcoef(y_true, y_pred),
+    }
+    return metrics
+
 # Model paths
-MODEL_DIR = Path("model")
+MODEL_DIR = Path("models")
 
 MODEL_PATHS = {
     "Logistic Regression": MODEL_DIR / "logistic_regression.joblib",
@@ -113,6 +162,35 @@ if uploaded_file is not None:
             col1.metric("Total Customers", len(predictions))
             col2.metric("Predicted Defaults", default_count)
             col3.metric("Predicted Non-Defaults", non_default_count)
+
+            target_label = "default.payment.next.month" if "default.payment.next.month" in data.columns else "Y" if "Y" in data.columns else None
+
+            if target_label is not None:
+                y_true = data[target_label].astype(int).to_numpy()
+                y_pred = predictions.astype(int)
+
+                y_score = None
+                if hasattr(model, "predict_proba"):
+                    probabilities = model.predict_proba(X)
+                    classes = list(model.classes_)
+                    if 1 in classes:
+                        default_index = classes.index(1)
+                        y_score = probabilities[:, default_index]
+
+                metrics = compute_model_metrics(y_true, y_pred, y_score)
+
+                st.subheader("Model Evaluation")
+                render_evaluation_metrics(metrics)
+
+                cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+                confusion_df = pd.DataFrame(
+                    cm,
+                    index=["Actual 0", "Actual 1"],
+                    columns=["Pred 0", "Pred 1"],
+                )
+
+                st.subheader("Confusion Matrix")
+                st.dataframe(confusion_df, use_container_width=True)
 
             st.subheader("Prediction Results")
             st.dataframe(results, use_container_width=True)
