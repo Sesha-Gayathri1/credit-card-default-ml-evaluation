@@ -65,7 +65,7 @@ def compute_model_metrics(y_true, y_pred, y_score=None):
     return metrics
 
 # Model paths
-MODEL_DIR = Path("models")
+MODEL_DIR = Path("model")
 
 MODEL_PATHS = {
     "Logistic Regression": MODEL_DIR / "logistic_regression.joblib",
